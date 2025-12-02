@@ -16,6 +16,9 @@ RUN npm ci
 # Copia o código fonte da aplicação
 COPY . .
 
+# Corrige quebras de linha do Windows
+RUN sed -i 's/\r$//' start.sh
+
 # Torna o script executável
 RUN chmod +x start.sh
 
