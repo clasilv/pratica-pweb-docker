@@ -22,6 +22,24 @@ services:
       retries: 10
       start_period: 10s
 
+  # Serviço Redis
+  redis-pweb:
+    image: redis:7-alpine
+    container_name: redis-pweb
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_pweb_data:/data
+    networks:
+      - todo-pweb-network
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redispassword}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   # Backend API
   backend-pweb:
     build:
@@ -31,15 +49,26 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      # BD
       DB_HOST: db-pweb
       DB_PORT: 5432
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: todolist
+      # Redis
+      REDIS_HOST: redis-pweb
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redispassword}
+      # JWT
+      JWT_SECRET: ${JWT_SECRET:-sua_chave_secreta_aqui_mude_em_producao}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      SALT_ROUNDS: ${SALT_ROUNDS:-10}
     ports:
       - "3000:3000"
     depends_on:
       db-pweb:
+        condition: service_healthy
+      redis-pweb:
         condition: service_healthy
     networks:
       - todo-pweb-network
@@ -67,3 +96,6 @@ networks:
 
 volumes:
   postgres_pweb_data:
+    driver: local
+  redis_pweb_data:
+    driver: local

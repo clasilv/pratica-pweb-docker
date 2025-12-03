@@ -1,3 +1,4 @@
 tutorial.md
 .playwright-mcp
 .DS_Store
+.env
