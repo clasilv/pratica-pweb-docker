@@ -32,7 +32,7 @@ services:
       - redis_pweb_data:/data
     networks:
       - todo-pweb-network
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redispassword}
+    command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -58,7 +58,6 @@ services:
       # Redis
       REDIS_HOST: redis-pweb
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-redispassword}
       # JWT
       JWT_SECRET: ${JWT_SECRET:-sua_chave_secreta_aqui_mude_em_producao}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
