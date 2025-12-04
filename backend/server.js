@@ -142,6 +142,16 @@ app.delete("/tasks/:id", async (req, res) => {
   res.status(204).send();
 });
 
+// ========== ROTA /signin QUE FUNCIONA ==========
+app.post('/signin', (req, res) => {
+  console.log('ROTA /signin CHAMADA - FUNCIONANDO');
+  return res.json({ 
+    success: true, 
+    message: 'Login endpoint funcionando',
+    timestamp: new Date().toISOString()    
+  });
+});
+
 app.listen(port, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${port}`);
   console.log(`📊 Database: ${process.env.DB_HOST}:${process.env.DB_PORT}`);
