@@ -1,5 +1,7 @@
 import express from "express";
 import cors from "cors";
+import { authenticate } from './src/middlewares/auth.js';
+import supabase from './src/config/supabase.js';
 import dotenv from "dotenv";
 import Redis from "ioredis";
 import bd from "./src/models/index.js";
@@ -181,7 +183,7 @@ app.get('/profile', async (req, res) => {
 });
 
 // PUT /profile - Atualiza dados do usuário
-app.put('/profile', async (req, res) => {
+app.put('/profile', authenticate, async (req, res) => {
   try {
     console.log('📨 PUT /profile chamado');
     console.log('📦 Dados recebidos:', req.body);
