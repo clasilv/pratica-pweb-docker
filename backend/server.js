@@ -15,7 +15,7 @@ const { Task, User } = bd;
 // Redis
 const redis = new Redis({
   host: process.env.REDIS_HOST || 'redis-pweb',
-  port: parseInt(.process.env.REDIS_PORT) || 6379,
+  port: parseInt(process.env.REDIS_PORT) || 6379,
 });
 
 redis.on('connect', () => console.log("✅ Redis conectado"));
