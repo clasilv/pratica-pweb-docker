@@ -182,30 +182,73 @@ app.get('/profile', async (req, res) => {
   }
 });
 
-// PUT /profile - Atualiza dados do usuário
 app.put('/profile', authenticate, async (req, res) => {
   try {
-    console.log('📨 PUT /profile chamado');
-    console.log('📦 Dados recebidos:', req.body);
+    console.log('📤 PUT /profile chamado por:', req.user.email);
     
-    const { name, email, photo } = req.body;
-    
-    // TEMPORÁRIO: Validação básica
-    if (!name && !email && !photo) {
+    const { name, email, photoBase64 } = req.body;
+
+    // Validação: pelo menos um campo para atualizar
+    if (!name && !email && !photoBase64) {
       return res.status(400).json({ error: 'Nenhum dado para atualizar' });
     }
-    
-    // TEMPORÁRIO: Mock de resposta (depois salvar no banco)
+
+    let photoUrl = null;
+    let updateData = {};
+
+    // 1. PROCESSAR FOTO (se fornecida)
+    if (photoBase64) {
+      try {
+        // Remove cabeçalho data:image/...;base64,
+        const base64Data = photoBase64.replace(/^data:image\/\w+;base64,/, '');
+        const buffer = Buffer.from(base64Data, 'base64');
+        
+        // Nome único do arquivo
+        const fileName = `avatar_${req.user.id}_${Date.now()}.jpg`;
+        
+        // Upload para Supabase Storage
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('avatars')
+          .upload(fileName, buffer, {
+            contentType: 'image/jpeg',
+            upsert: true
+          });
+
+        if (uploadError) {
+          console.error('❌ Erro no upload Supabase:', uploadError);
+          return res.status(500).json({ error: 'Falha ao enviar foto' });
+        }
+
+        // Pega URL pública
+        const { data: { publicUrl } } = supabase.storage
+          .from('avatars')
+          .getPublicUrl(fileName);
+        
+        photoUrl = publicUrl;
+        updateData.photo_url = photoUrl;
+        console.log('✅ Foto enviada para Supabase:', photoUrl);
+        
+      } catch (uploadError) {
+        console.error('❌ Erro no processamento da foto:', uploadError);
+        return res.status(500).json({ error: 'Erro ao processar imagem' });
+      }
+    }
+
+    // 2. ATUALIZAR OUTROS CAMPOS
+    if (name) updateData.name = name;
+    if (email) updateData.email = email;
+
+    // 3. RESPOSTA
     const updatedUser = {
-      id: 'user-123',
-      name: name || 'Clara Silva',
-      email: email || 'clara@exemplo.com',
-      photo: photo || 'https://images.unsplash.com/photo-1494790108755-2616b612b786?w=150&h=150&fit=crop&crop=face'
+      id: req.user.id,
+      name: name || req.user.name,
+      email: email || req.user.email,
+      photo_url: photoUrl || null,
+      message: photoBase64 ? 'Foto e perfil atualizados!' : 'Perfil atualizado!'
     };
-    
-    console.log('✅ Perfil atualizado (mock):', updatedUser);
+
     res.json(updatedUser);
-    
+
   } catch (error) {
     console.error('❌ Erro no PUT /profile:', error);
     res.status(500).json({ error: 'Erro interno no servidor' });
