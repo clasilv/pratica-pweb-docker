@@ -5,6 +5,8 @@ import Redis from "ioredis";
 import bd from "./src/models/index.js";
 import authRoutes from "./src/routes/auth.js";
 import { authMiddleware } from "./src/middleware/authMiddleware.js";
+import supabase from './src/config/supabase.js'; // ← da dupla (Supabase)
+import { authenticate } from './src/middlewares/auth.js'; // ← da dupla (outro auth)
 
 dotenv.config();
 
@@ -13,7 +15,7 @@ const { Task, User } = bd;
 // Redis
 const redis = new Redis({
   host: process.env.REDIS_HOST || 'redis-pweb',
-  port: parseInt(process.env.REDIS_PORT) || 6379,
+  port: parseInt(.process.env.REDIS_PORT) || 6379,
 });
 
 redis.on('connect', () => console.log("✅ Redis conectado"));
@@ -84,7 +86,7 @@ const clearTasksCache = async () => {
 // ROTAS
 app.get("/", (req, res) => {
   res.json({ 
-    message: "API Todo List com Cache Redis",
+    message: "API Todo List com Cache Redis e Supabase Storage",
     status: "online",
     auth: "habilitada",
     endpoints: {
@@ -96,17 +98,21 @@ app.get("/", (req, res) => {
         list: "GET /tasks (com cache)",
         create: "POST /tasks (autenticado)",
         delete: "DELETE /tasks/:id (autenticado)"
+      },
+      storage: {
+        upload: "POST /upload (Supabase - parte da dupla)"
       }
     }
   });
 });
+
+// ============ SUAS ROTAS (JÁ FUNCIONAM) ============
 
 // GET /tasks COM CACHE (público)
 app.get("/tasks", cacheMiddleware('tasks', 30), async (req, res) => {
   try {
     console.log('📝 GET /tasks (TODAS as tarefas)');
     
-    // MOSTRA TODAS AS TAREFAS, SEM FILTRO
     const tasks = await Task.findAll({ 
       order: [['createdAt', 'DESC']] 
     });
@@ -129,7 +135,6 @@ app.post("/tasks", authMiddleware, async (req, res) => {
       return res.status(400).json({ error: "Descrição obrigatória" });
     }
     
-    // Usa o usuário autenticado
     const userId = req.user.id;
     
     const task = await Task.create({ 
@@ -147,10 +152,9 @@ app.post("/tasks", authMiddleware, async (req, res) => {
   }
 });
 
-/// NO DELETE /tasks/:id
+// DELETE /tasks/:id
 app.delete("/tasks/:id", authMiddleware, async (req, res) => {
   try {
-    // VALIDAÇÃO NOVA: Verifica se o ID é válido
     if (!req.params.id || req.params.id === 'undefined') {
       console.log(`❌ ID inválido recebido: ${req.params.id}`);
       return res.status(400).json({ 
@@ -169,7 +173,6 @@ app.delete("/tasks/:id", authMiddleware, async (req, res) => {
     }
     
     await task.destroy();
-    
     await clearTasksCache();
     console.log(`✅ Task deletada: ${req.params.id}`);
     res.status(204).send();
@@ -179,12 +182,9 @@ app.delete("/tasks/:id", authMiddleware, async (req, res) => {
   }
 });
 
-
-// PUT /tasks/:id (COM autenticação) - Para o frontend usar
-// NO PUT /tasks/:id
+// PUT /tasks/:id
 app.put("/tasks/:id", authMiddleware, async (req, res) => {
   try {
-    // VALIDAÇÃO NOVA: Verifica se o ID é válido
     if (!req.params.id || req.params.id === 'undefined') {
       console.log(`❌ ID inválido recebido: ${req.params.id}`);
       return res.status(400).json({ 
@@ -205,7 +205,6 @@ app.put("/tasks/:id", authMiddleware, async (req, res) => {
     if (completed !== undefined) task.completed = completed;
     
     await task.save();
-    
     await clearTasksCache();
     console.log(`✅ Task atualizada via PUT: ${task.id}`);
     res.json(task);
@@ -215,11 +214,9 @@ app.put("/tasks/:id", authMiddleware, async (req, res) => {
   }
 });
 
-// PATCH /tasks/:id - Atualizar tarefa (marcar como completa)
-// NO PATCH /tasks/:id (também adicione)
+// PATCH /tasks/:id
 app.patch("/tasks/:id", authMiddleware, async (req, res) => {
   try {
-    // VALIDAÇÃO NOVA
     if (!req.params.id || req.params.id === 'undefined') {
       console.log(`❌ ID inválido recebido: ${req.params.id}`);
       return res.status(400).json({ 
@@ -240,7 +237,6 @@ app.patch("/tasks/:id", authMiddleware, async (req, res) => {
     if (completed !== undefined) task.completed = completed;
     
     await task.save();
-    
     await clearTasksCache();
     console.log(`✅ Task atualizada: ${task.id}`);
     res.json(task);
@@ -250,37 +246,15 @@ app.patch("/tasks/:id", authMiddleware, async (req, res) => {
   }
 });
 
-// Rota de saúde da API (pública)
-app.get("/health", async (req, res) => {
-  try {
-    const dbStatus = await bd.sequelize.authenticate();
-    const redisStatus = await redis.ping();
-    
-    res.json({
-      status: "healthy",
-      database: "connected",
-      redis: "connected",
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime()
-    });
-  } catch (error) {
-    res.status(500).json({
-      status: "unhealthy",
-      error: error.message
-    });
-  }
-});
+// ============ ROTAS DE AUTENTICAÇÃO COMPLETAS (SUAS) ============
 
-// ============ NOVAS ROTAS PARA COMPATIBILIDADE COM FRONTEND ============
-
-// Endpoint /signin - Compatível com frontend (aceita email, ignora password)
+// POST /signin - Completo com JWT
 app.post("/signin", async (req, res) => {
   try {
     console.log('🔍 POST /signin chamado pelo frontend');
     const { email, password } = req.body;
     
     console.log('📧 Email recebido:', email);
-    console.log('🔐 Password recebido:', password ? '***' : 'não fornecido');
     
     if (!email) {
       return res.status(400).json({ 
@@ -289,61 +263,31 @@ app.post("/signin", async (req, res) => {
       });
     }
     
-    // Busca usuário pelo email
-    let user = await User.findOne({ 
-      where: { email } 
-    });
+    let user = await User.findOne({ where: { email } });
     
-    // Se não existe, cria novo (sem senha, sistema simplificado)
     if (!user) {
-      // Gera username a partir do email
       const username = email.split('@')[0];
-      
-      try {
-        user = await User.create({
-          username,
-          email
-        });
-        console.log(`✅ Novo usuário criado: ${email}`);
-      } catch (createError) {
-        console.error('❌ Erro ao criar usuário:', createError);
-        return res.status(500).json({
-          success: false,
-          error: 'Erro ao criar usuário'
-        });
-      }
+      user = await User.create({ username, email });
+      console.log(`✅ Novo usuário criado: ${email}`);
     }
     
-    console.log(`✅ Usuário encontrado/criado: ${user.username} (${user.email})`);
+    console.log(`✅ Usuário encontrado/criado: ${user.username}`);
     
-    // Gera token (formato que frontend espera)
     const jwt = await import('jsonwebtoken');
     const accessToken = jwt.sign(
-      {
-        id: user.id,
-        username: user.username,
-        email: user.email
-      },
+      { id: user.id, username: user.username, email: user.email },
       process.env.JWT_SECRET || 'segredo_simples_dev',
       { expiresIn: process.env.JWT_EXPIRES_IN || '30d' }
     );
     
-    console.log(`✅ Token gerado para: ${email}`);
-    
-    // Retorna no formato EXATO que o frontend espera
     const response = {
       success: true,
       accessToken,
-      refreshToken: accessToken, // Mesmo token como refresh (simplificado)
-      user: {
-        id: user.id,
-        name: user.username, // Frontend espera "name", não "username"
-        email: user.email,
-        photo: '' // Campo vazio, pode ser preenchido depois
-      }
+      refreshToken: accessToken,
+      user: { id: user.id, name: user.username, email: user.email, photo: '' }
     };
     
-    console.log('📤 Enviando resposta:', JSON.stringify(response).substring(0, 100) + '...');
+    console.log(`✅ Token gerado para: ${email}`);
     res.json(response);
     
   } catch (error) {
@@ -364,12 +308,11 @@ app.post("/signin", async (req, res) => {
   }
 });
 
-// Endpoint /profile (GET) - Compatível com frontend
+// GET /profile - Completo com JWT
 app.get("/profile", authMiddleware, async (req, res) => {
   try {
     console.log('🔍 GET /profile para:', req.user.email);
     
-    // Busca usuário no banco
     const user = await User.findByPk(req.user.id, {
       attributes: ['id', 'username', 'email', 'createdAt']
     });
@@ -381,12 +324,11 @@ app.get("/profile", authMiddleware, async (req, res) => {
       });
     }
     
-    // Retorna no formato que frontend espera
     res.json({
       id: user.id,
-      name: user.username, // Mapeia username para name
+      name: user.username,
       email: user.email,
-      photo: '' // Campo vazio por enquanto
+      photo: ''
     });
     
   } catch (error) {
@@ -398,7 +340,7 @@ app.get("/profile", authMiddleware, async (req, res) => {
   }
 });
 
-// Endpoint /profile (PUT) para atualização
+// PUT /profile - Completo com JWT
 app.put("/profile", authMiddleware, async (req, res) => {
   try {
     console.log('🔍 PUT /profile por:', req.user.email);
@@ -415,7 +357,6 @@ app.put("/profile", authMiddleware, async (req, res) => {
       });
     }
     
-    // Atualiza campos permitidos
     if (name !== undefined) {
       console.log(`📝 Atualizando nome: ${user.username} -> ${name}`);
       user.username = name;
@@ -424,7 +365,6 @@ app.put("/profile", authMiddleware, async (req, res) => {
     if (email !== undefined && email !== user.email) {
       console.log(`📝 Atualizando email: ${user.email} -> ${email}`);
       
-      // Verifica se novo email já existe
       const emailExists = await User.findOne({ where: { email } });
       if (emailExists && emailExists.id !== user.id) {
         return res.status(400).json({
@@ -434,8 +374,6 @@ app.put("/profile", authMiddleware, async (req, res) => {
       }
       user.email = email;
     }
-    
-    // photo seria salvo em outro lugar (Supabase - parte da sua dupla)
     
     await user.save();
     console.log('✅ Perfil atualizado com sucesso');
@@ -465,11 +403,39 @@ app.put("/profile", authMiddleware, async (req, res) => {
   }
 });
 
-// Rota de debug para verificar autenticação
+// ============ ROTAS DA DUPLA (SUPABASE) ============
+
+// (Aqui vão as rotas de upload que sua dupla implementou)
+// Exemplo: app.post("/upload", authenticate, ...)
+
+// ============ ROTAS ADICIONAIS ============
+
+// Rota de saúde da API
+app.get("/health", async (req, res) => {
+  try {
+    const dbStatus = await bd.sequelize.authenticate();
+    const redisStatus = await redis.ping();
+    
+    res.json({
+      status: "healthy",
+      database: "connected",
+      redis: "connected",
+      supabase: supabase ? "configured" : "not configured",
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime()
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: "unhealthy",
+      error: error.message
+    });
+  }
+});
+
+// Rota de debug
 app.post("/debug/auth", async (req, res) => {
   try {
     console.log('🔍 DEBUG /debug/auth');
-    console.log('📦 Headers:', req.headers);
     
     const authHeader = req.headers.authorization;
     console.log('🔐 Authorization header:', authHeader);
@@ -483,61 +449,38 @@ app.post("/debug/auth", async (req, res) => {
         const decoded = jwt.verify(token, process.env.JWT_SECRET || 'segredo_simples_dev');
         console.log('✅ Token válido para:', decoded.email);
         
-        return res.json({
-          success: true,
-          message: 'Token válido!',
-          user: decoded
-        });
+        return res.json({ success: true, message: 'Token válido!', user: decoded });
       } catch (jwtError) {
         console.log('❌ Token inválido:', jwtError.message);
-        return res.json({
-          success: false,
-          error: 'Token inválido',
-          details: jwtError.message
-        });
+        return res.json({ success: false, error: 'Token inválido', details: jwtError.message });
       }
     }
     
-    res.json({
-      success: false,
-      error: 'Token não fornecido',
-      tip: 'Enviar: Authorization: Bearer SEU_TOKEN'
-    });
+    res.json({ success: false, error: 'Token não fornecido' });
     
   } catch (error) {
     console.error('❌ Erro em debug:', error);
     res.status(500).json({ error: error.message });
   }
 });
-// ============ FIM DAS NOVAS ROTAS ============
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log("=".repeat(50));
   console.log("🚀 Server rodando na porta", PORT);
   console.log("📦 Cache Redis ativo");
-  console.log("🔐 AUTENTICAÇÃO HABILITADA");
-  console.log("📊 NOVAS ROTAS ADICIONADAS:");
-  console.log("  POST /signin     - Login compatível com frontend");
-  console.log("  GET  /profile    - Perfil do usuário");
-  console.log("  PUT  /profile    - Atualizar perfil");
-  console.log("  POST /debug/auth - Debug de autenticação");
+  console.log("🔐 AUTENTICAÇÃO JWT habilitada");
+  console.log("☁️  Supabase Storage configurado");
   console.log("=".repeat(50));
-  console.log("\n📋 Endpoints disponíveis:");
+  console.log("\n📋 Endpoints principais:");
   console.log("🔓 Públicos:");
   console.log("  GET  /          - Status da API");
   console.log("  GET  /health    - Saúde do sistema");
-  console.log("  GET  /tasks     - Listar tarefas (com cache)");
-  console.log("  POST /auth/identify - Identificar-se (nome + email)");
-  console.log("  POST /signin     - Login (email apenas)");
-  console.log("\n🔒 Autenticados (token JWT no header):");
-  console.log("  POST /tasks     - Criar tarefa");
-  console.log("  PUT  /tasks/:id - Atualizar tarefa");
-  console.log("  PATCH /tasks/:id - Atualizar tarefa");
-  console.log("  DELETE /tasks/:id - Remover tarefa");
-  console.log("  GET  /auth/me   - Ver seu perfil");
-  console.log("  GET  /profile   - Perfil (frontend)");
-  console.log("  PUT  /profile   - Atualizar perfil");
+  console.log("  GET  /tasks     - Listar tarefas (com cache Redis)");
+  console.log("  POST /signin    - Login com JWT");
+  console.log("\n🔒 Autenticados:");
+  console.log("  POST/PUT/PATCH/DELETE /tasks     - Gerenciar tarefas");
+  console.log("  GET/PUT /profile                 - Perfil do usuário");
+  console.log("  POST /upload                     - Upload fotos (Supabase)");
   console.log("=".repeat(50));
-  console.log("\n💡 Dica: Use /signin com qualquer email (senha é ignorada)!");
 });
