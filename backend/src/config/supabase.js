@@ -1,10 +1,20 @@
-// src/config/supabase.js
+﻿// Teste de conteúdo
 import { createClient } from '@supabase/supabase-js';
-import 'dotenv/config';  // Forma ES Module do dotenv
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
+let supabaseInstance = null;
 
-export default supabase;
+try {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_ANON_KEY;
+  
+  if (supabaseUrl && supabaseKey) {
+    supabaseInstance = createClient(supabaseUrl, supabaseKey);
+    console.log('✅ Supabase configurado');
+  } else {
+    console.warn('⚠️  Variáveis do Supabase não encontradas');
+  }
+} catch (error) {
+  console.warn('⚠️  Supabase não disponível:', error.message);
+}
+
+export default supabaseInstance;
