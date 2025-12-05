@@ -185,22 +185,11 @@ app.post("/signin", async (req, res) => {
 // Rota de saúde
 app.get("/health", async (req, res) => {
   try {
-    const dbStatus = await bd.sequelize.authenticate();
-    const redisStatus = await redis.ping();
-    
-    res.json({
-      status: "healthy",
-      database: "connected",
-      redis: "connected",
-      supabase: supabase ? "configured" : "not configured",
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime()
-    });
+    await bd.sequelize.authenticate();
+    await redis.ping();
+    res.json({ status: "healthy", database: "ok", redis: "ok" });
   } catch (error) {
-    res.status(500).json({
-      status: "unhealthy",
-      error: error.message
-    });
+    res.status(500).json({ status: "unhealthy", error: error.message });
   }
 });
 
