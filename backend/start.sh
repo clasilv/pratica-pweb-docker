@@ -3,7 +3,6 @@ set -e
 
 echo "Aguardando banco de dados ficar pronto..."
 # Aguarda alguns segundos para garantir que o banco está pronto
-# (o depends_on com healthcheck já garante isso, mas aguardamos por segurança)
 sleep 3
 
 # Conecta ao banco postgres padrão e cria o banco se não existir
@@ -48,7 +47,6 @@ if [ "$DB_EXISTS" != "1" ]; then
   else
     echo "✗ ERRO: Falha ao criar banco de dados (código: $CREATE_RESULT)"
     echo "Tentando verificar novamente..."
-    # Verifica novamente após um momento
     sleep 2
     DB_EXISTS_AFTER=$(psql -h ${DB_HOST_VALUE} -p ${DB_PORT_VALUE} -U ${DB_USER_VALUE} -d postgres -tc \
       "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME_VALUE}';" 2>/dev/null | xargs)
@@ -66,7 +64,7 @@ fi
 unset PGPASSWORD
 
 echo "Executando migrations..."
-NODE_ENV=${NODE_ENV:-production} npx sequelize-cli db:migrate
+NODE_ENV=${NODE_ENV:-development} npx sequelize-cli db:migrate
 
 if [ $? -eq 0 ]; then
   echo "✓ Migrations executadas com sucesso!"

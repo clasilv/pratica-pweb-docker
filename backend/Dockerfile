@@ -16,11 +16,14 @@ RUN npm ci
 # Copia o código fonte da aplicação
 COPY . .
 
-# Corrige quebras de linha do Windows
-RUN sed -i 's/\r$//' start.sh
-
-# Torna o script executável
-RUN chmod +x start.sh
+# Corrige quebras de linha do Windows (COM VALIDAÇÃO)
+RUN if [ -f "start.sh" ]; then \
+    sed -i 's/\r$//' start.sh && \
+    chmod +x start.sh && \
+    echo "✓ start.sh corrigido e com permissão de execução"; \
+  else \
+    echo "⚠️ Arquivo start.sh não encontrado, continuando..."; \
+  fi
 
 # Expõe a porta que a aplicação usa
 EXPOSE 3000
@@ -31,4 +34,3 @@ ENV PORT=3000
 
 # Comando para iniciar a aplicação (executa migrations e inicia servidor)
 CMD ["./start.sh"]
-
