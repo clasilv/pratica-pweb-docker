@@ -1,42 +1,39 @@
 import express from "express";
 import cors from "cors";
-import { authenticate } from './src/middlewares/auth.js';
-import supabase from './src/config/supabase.js';
 import dotenv from "dotenv";
 import Redis from "ioredis";
 import bd from "./src/models/index.js";
-import authRoutes from "./src/routes/auth.js";
+import { authMiddleware } from "./src/middleware/authMiddleware.js";
+import { authenticate } from './src/middlewares/auth.js';
+import supabase from './src/config/supabase.js';
 
 dotenv.config();
 
-const { Task } = bd;
+const { Task, User } = bd;
 
-// ========== CONFIGURAÇÃO REDIS (para cache) ==========
+// Redis
 const redis = new Redis({
   host: process.env.REDIS_HOST || 'redis-pweb',
   port: parseInt(process.env.REDIS_PORT) || 6379,
 });
 
-redis.on('connect', () => console.log("✅ Redis conectado (para cache)"));
-redis.on('error', (err) => console.error("❌ Erro no Redis:", err.message));
+redis.on('connect', () => console.log("✅ Redis conectado"));
+redis.on('error', (err) => console.error("❌ Redis erro:", err));
 
-// Testa a conexão com o banco de dados
+// Banco
 try {
   await bd.sequelize.authenticate();
-  console.log("✅ Conexão com o banco de dados estabelecida com sucesso.");
+  console.log("✅ Banco OK");
 } catch (error) {
-  console.error("❌ Erro ao conectar ao banco de dados:", error);
+  console.error("❌ Banco erro:", error);
   process.exit(1);
 }
 
 const app = express();
-const port = 3000;
-
 app.use(express.json());
 app.use(cors());
-app.use("/", authRoutes);
 
-// ========== IMPLEMENTAÇÃO DE CACHE (MISS/HIT) ==========
+// Cache middleware
 const cacheMiddleware = (prefix, ttl = 30) => {
   return async (req, res, next) => {
     if (req.method !== 'GET') return next();
@@ -44,145 +41,328 @@ const cacheMiddleware = (prefix, ttl = 30) => {
     const cacheKey = `${prefix}:${req.originalUrl}`;
     
     try {
-      // 1. Verifica se tem no cache (CACHE HIT)
       const cached = await redis.get(cacheKey);
       if (cached) {
         console.log(`📦 CACHE HIT: ${cacheKey}`);
         return res.json(JSON.parse(cached));
       }
       
-      // 2. Se não tem (CACHE MISS)
       console.log(`❌ CACHE MISS: ${cacheKey}`);
       
-      // Salva referência à função original
       const originalJson = res.json.bind(res);
-      
-      // Sobrescreve res.json
       res.json = function(data) {
-        // Salva no cache de forma assíncrona (não-bloqueante)
         if (res.statusCode >= 200 && res.statusCode < 300) {
           redis.setex(cacheKey, ttl, JSON.stringify(data))
             .then(() => console.log(`💾 Cache salvo: ${cacheKey}`))
-            .catch(err => console.log('⚠️ Erro ao salvar cache:', err.message));
+            .catch(err => console.log('⚠️ Erro cache:', err));
         }
-        
-        // Retorna resposta normalmente
         return originalJson(data);
       };
       
       next();
     } catch (err) {
-      console.log('⚠️ Erro no cache, continuando sem cache...', err.message);
+      console.log('⚠️ Cache erro:', err.message);
       next();
     }
   };
 };
 
-// ========== INVALIDAÇÃO DO CACHE ==========
 const clearTasksCache = async () => {
   try {
     const keys = await redis.keys('tasks:*');
     if (keys.length) {
-      console.log(`🗑️ Cache invalidado (${keys.length} chaves):`, keys);
+      console.log(`🗑️ Cache invalidado (${keys.length} chaves)`);
       await redis.del(keys);
-      console.log(`✅ Cache limpo com sucesso`);
-    } else {
-      console.log(`ℹ️ Nenhuma chave de cache para invalidar`);
     }
   } catch (err) {
-    console.log('⚠️ Erro ao invalidar cache:', err.message);
+    console.log('⚠️ Limpar cache erro:', err.message);
   }
 };
 
-// ========== ROTAS COM CACHE ==========
+// ============ ROTAS PÚBLICAS ============
+
 app.get("/", (req, res) => {
-  res.json({ message: "API Todo List" });
-});
-
-// GET /tasks COM CACHE
-app.get("/tasks", cacheMiddleware('tasks', 30), async (req, res) => {
-  const tasks = await Task.findAll({ order: [['createdAt', 'DESC']] });
-  res.json(tasks);
-});
-
-// GET /tasks/:id COM CACHE
-app.get("/tasks/:id", cacheMiddleware('task', 60), async (req, res) => {
-  const task = await Task.findByPk(req.params.id);
-  if (!task) return res.status(404).json({ error: "Tarefa não encontrada" });
-  res.json(task);
-});
-
-// ========== ROTAS QUE INVALIDAM CACHE ==========
-app.post("/tasks", async (req, res) => {
-  const { description } = req.body;
-  if (!description) return res.status(400).json({ error: "Descrição obrigatória" });
-  const task = await Task.create({ description, completed: false });
-  
-  // INVALIDAÇÃO DO CACHE após criação
-  await clearTasksCache();
-  
-  res.status(201).json(task);
-});
-
-app.put("/tasks/:id", async (req, res) => {
-  const { description, completed } = req.body;
-  const task = await Task.findByPk(req.params.id);
-  if (!task) return res.status(404).json({ error: "Tarefa não encontrada" });
-  await task.update({ description, completed });
-  
-  // INVALIDAÇÃO DO CACHE após atualização
-  await clearTasksCache();
-  
-  res.json(task);
-});
-
-app.delete("/tasks/:id", async (req, res) => {
-  const deleted = await Task.destroy({ where: { id: req.params.id } });
-  if (!deleted) return res.status(404).json({ error: "Tarefa não encontrada" });
-  
-  // INVALIDAÇÃO DO CACHE após exclusão
-  await clearTasksCache();
-  
-  res.status(204).send();
-});
-
-// ========== ROTA /signin QUE FUNCIONA ==========
-app.post('/signin', (req, res) => {
-  console.log('ROTA /signin CHAMADA - FUNCIONANDO');
-  return res.json({ 
-    success: true, 
-    message: 'Login endpoint funcionando',
-    timestamp: new Date().toISOString()    
+  res.json({ 
+    message: "API Todo List com Cache Redis e Supabase Storage",
+    status: "online",
+    auth: "habilitada",
+    endpoints: {
+      auth: {
+        signin: "POST /signin",
+        profile: "GET /profile (autenticado)"
+      },
+      tasks: {
+        list: "GET /tasks (com cache)",
+        create: "POST /tasks (autenticado)",
+        update: "PUT/PATCH /tasks/:id (autenticado)",
+        delete: "DELETE /tasks/:id (autenticado)"
+      },
+      profile: {
+        get: "GET /profile (autenticado)",
+        update: "PUT /profile (autenticado, com upload de foto)"
+      }
+    }
   });
 });
 
-// ========== ROTAS DE PERFIL ==========
-
-// GET /profile - Obtém dados do usuário
-app.get('/profile', async (req, res) => {
+// GET /tasks COM CACHE (público)
+app.get("/tasks", cacheMiddleware('tasks', 30), async (req, res) => {
   try {
-    console.log('📨 GET /profile chamado');
+    console.log('📝 GET /tasks (TODAS as tarefas)');
     
-    // TEMPORÁRIO: Mock de usuário (depois seu colega implementa JWT)
-    // Quando o middleware JWT estiver pronto, trocar por:
-    // const userId = req.user.id;
+    const tasks = await Task.findAll({ 
+      order: [['createdAt', 'DESC']] 
+    });
     
-    const mockUser = {
-      id: 'user-123',
-      name: 'Clara Silva',
-      email: 'clara@exemplo.com',
-      photo: 'https://images.unsplash.com/photo-1494790108755-2616b612b786?w=150&h=150&fit=crop&crop=face'
-    };
-    
-    res.json(mockUser);
-    
+    console.log(`✅ Retornando ${tasks.length} tasks`);
+    res.json(tasks);
   } catch (error) {
-    console.error('❌ Erro no GET /profile:', error);
-    res.status(500).json({ error: 'Erro interno no servidor' });
+    console.error('❌ GET /tasks erro:', error);
+    res.status(500).json({ error: 'Erro interno' });
   }
 });
 
-app.put('/profile', authenticate, async (req, res) => {
+// POST /signin - Login
+app.post("/signin", async (req, res) => {
+  try {
+    console.log('🔍 POST /signin chamado pelo frontend');
+    const { email, password } = req.body;
+    
+    console.log('📧 Email recebido:', email);
+    
+    if (!email) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Email é obrigatório' 
+      });
+    }
+    
+    let user = await User.findOne({ where: { email } });
+    
+    if (!user) {
+      const username = email.split('@')[0];
+      user = await User.create({ username, email });
+      console.log(`✅ Novo usuário criado: ${email}`);
+    }
+    
+    console.log(`✅ Usuário encontrado/criado: ${user.username}`);
+    
+    const jwt = await import('jsonwebtoken');
+    const accessToken = jwt.sign(
+      { id: user.id, username: user.username, email: user.email },
+      process.env.JWT_SECRET || 'segredo_simples_dev',
+      { expiresIn: process.env.JWT_EXPIRES_IN || '30d' }
+    );
+    
+    const response = {
+      success: true,
+      accessToken,
+      refreshToken: accessToken,
+      user: { id: user.id, name: user.username, email: user.email, photo: '' }
+    };
+    
+    console.log(`✅ Token gerado para: ${email}`);
+    res.json(response);
+    
+  } catch (error) {
+    console.error('❌ ERRO em /signin:', error);
+    
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Email já está em uso' 
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false,
+      error: 'Erro interno no servidor',
+      details: error.message 
+    });
+  }
+});
+
+// Rota de saúde
+app.get("/health", async (req, res) => {
+  try {
+    const dbStatus = await bd.sequelize.authenticate();
+    const redisStatus = await redis.ping();
+    
+    res.json({
+      status: "healthy",
+      database: "connected",
+      redis: "connected",
+      supabase: supabase ? "configured" : "not configured",
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime()
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: "unhealthy",
+      error: error.message
+    });
+  }
+});
+
+// ============ ROTAS PROTEGIDAS (TASKS) ============
+
+// POST /tasks (COM autenticação)
+app.post("/tasks", authMiddleware, async (req, res) => {
+  try {
+    console.log('📝 POST /tasks');
+    const { description } = req.body;
+    
+    if (!description) {
+      return res.status(400).json({ error: "Descrição obrigatória" });
+    }
+    
+    const userId = req.user.id;
+    
+    const task = await Task.create({ 
+      description, 
+      completed: false,
+      userId
+    });
+    
+    await clearTasksCache();
+    console.log(`✅ Task criada: ${task.id} para usuário ${req.user.email}`);
+    res.status(201).json(task);
+  } catch (error) {
+    console.error('❌ POST /tasks erro:', error);
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+// DELETE /tasks/:id
+app.delete("/tasks/:id", authMiddleware, async (req, res) => {
+  try {
+    if (!req.params.id || req.params.id === 'undefined') {
+      console.log(`❌ ID inválido recebido: ${req.params.id}`);
+      return res.status(400).json({ 
+        error: "ID da tarefa inválido ou não fornecido" 
+      });
+    }
+    
+    console.log(`📝 DELETE /tasks/${req.params.id} por ${req.user.email}`);
+    
+    const task = await Task.findByPk(req.params.id);
+    
+    if (!task) {
+      return res.status(404).json({ 
+        error: "Tarefa não encontrada"
+      });
+    }
+    
+    await task.destroy();
+    await clearTasksCache();
+    console.log(`✅ Task deletada: ${req.params.id}`);
+    res.status(204).send();
+  } catch (error) {
+    console.error('❌ DELETE /tasks erro:', error);
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+// PUT /tasks/:id
+app.put("/tasks/:id", authMiddleware, async (req, res) => {
+  try {
+    if (!req.params.id || req.params.id === 'undefined') {
+      console.log(`❌ ID inválido recebido: ${req.params.id}`);
+      return res.status(400).json({ 
+        error: "ID da tarefa inválido ou não fornecido" 
+      });
+    }
+    
+    console.log(`📝 PUT /tasks/${req.params.id}`);
+    const { description, completed } = req.body;
+    
+    const task = await Task.findByPk(req.params.id);
+    
+    if (!task) {
+      return res.status(404).json({ error: "Tarefa não encontrada" });
+    }
+    
+    if (description !== undefined) task.description = description;
+    if (completed !== undefined) task.completed = completed;
+    
+    await task.save();
+    await clearTasksCache();
+    console.log(`✅ Task atualizada via PUT: ${task.id}`);
+    res.json(task);
+  } catch (error) {
+    console.error('❌ PUT /tasks erro:', error);
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+// PATCH /tasks/:id
+app.patch("/tasks/:id", authMiddleware, async (req, res) => {
+  try {
+    if (!req.params.id || req.params.id === 'undefined') {
+      console.log(`❌ ID inválido recebido: ${req.params.id}`);
+      return res.status(400).json({ 
+        error: "ID da tarefa inválido ou não fornecido" 
+      });
+    }
+    
+    console.log(`📝 PATCH /tasks/${req.params.id}`);
+    const { description, completed } = req.body;
+    
+    const task = await Task.findByPk(req.params.id);
+    
+    if (!task) {
+      return res.status(404).json({ error: "Tarefa não encontrada" });
+    }
+    
+    if (description !== undefined) task.description = description;
+    if (completed !== undefined) task.completed = completed;
+    
+    await task.save();
+    await clearTasksCache();
+    console.log(`✅ Task atualizada: ${task.id}`);
+    res.json(task);
+  } catch (error) {
+    console.error('❌ PATCH /tasks erro:', error);
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+// ============ ROTAS PROTEGIDAS (PERFIL) ============
+
+// GET /profile
+app.get("/profile", authenticate, async (req, res) => {
+  try {
+    console.log('🔍 GET /profile para:', req.user.email);
+    
+    const user = await User.findByPk(req.user.id, {
+      attributes: ['id', 'username', 'email', 'createdAt']
+    });
+    
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Usuário não encontrado' 
+      });
+    }
+    
+    res.json({
+      id: user.id,
+      name: user.username,
+      email: user.email,
+      photo: ''
+    });
+    
+  } catch (error) {
+    console.error('❌ Erro em GET /profile:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Erro interno no servidor' 
+    });
+  }
+});
+
+// PUT /profile COM UPLOAD DE FOTO (SUA VERSÃO)
+app.put("/profile", authenticate, async (req, res) => {
   try {
     console.log('📤 PUT /profile chamado por:', req.user.email);
     
@@ -238,7 +418,24 @@ app.put('/profile', authenticate, async (req, res) => {
     if (name) updateData.name = name;
     if (email) updateData.email = email;
 
-    // 3. RESPOSTA
+    // 3. ATUALIZAR NO BANCO
+    const user = await User.findByPk(req.user.id);
+    if (user) {
+      if (name !== undefined) user.username = name;
+      if (email !== undefined && email !== user.email) {
+        const emailExists = await User.findOne({ where: { email } });
+        if (emailExists && emailExists.id !== user.id) {
+          return res.status(400).json({
+            success: false,
+            error: 'Email já está em uso por outro usuário'
+          });
+        }
+        user.email = email;
+      }
+      await user.save();
+    }
+
+    // 4. RESPOSTA
     const updatedUser = {
       id: req.user.id,
       name: name || req.user.name,
@@ -250,13 +447,72 @@ app.put('/profile', authenticate, async (req, res) => {
     res.json(updatedUser);
 
   } catch (error) {
-    console.error('❌ Erro no PUT /profile:', error);
-    res.status(500).json({ error: 'Erro interno no servidor' });
+    console.error('❌ Erro em PUT /profile:', error);
+    
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Email já está em uso' 
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false,
+      error: 'Erro interno no servidor',
+      details: error.message 
+    });
   }
 });
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`🚀 Server running on port ${port}`);
-  console.log(`📊 Database: ${process.env.DB_HOST}:${process.env.DB_PORT}`);
-  console.log(`🔗 Redis Cache: ${process.env.REDIS_HOST || 'redis-pweb'}:${process.env.REDIS_PORT || 6379}`);
+// ============ ROTA DEBUG ============
+
+app.post("/debug/auth", async (req, res) => {
+  try {
+    console.log('🔍 DEBUG /debug/auth');
+    
+    const authHeader = req.headers.authorization;
+    console.log('🔐 Authorization header:', authHeader);
+    
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      console.log('✅ Token recebido:', token.substring(0, 20) + '...');
+      
+      const jwt = await import('jsonwebtoken');
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'segredo_simples_dev');
+        console.log('✅ Token válido para:', decoded.email);
+        
+        return res.json({ success: true, message: 'Token válido!', user: decoded });
+      } catch (jwtError) {
+        console.log('❌ Token inválido:', jwtError.message);
+        return res.json({ success: false, error: 'Token inválido', details: jwtError.message });
+      }
+    }
+    
+    res.json({ success: false, error: 'Token não fornecido' });
+    
+  } catch (error) {
+    console.error('❌ Erro em debug:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log("=".repeat(50));
+  console.log("🚀 Server rodando na porta", PORT);
+  console.log("📦 Cache Redis ativo");
+  console.log("🔐 AUTENTICAÇÃO JWT habilitada");
+  console.log("☁️  Supabase Storage configurado");
+  console.log("=".repeat(50));
+  console.log("\n📋 Endpoints principais:");
+  console.log("🔓 Públicos:");
+  console.log("  GET  /          - Status da API");
+  console.log("  GET  /health    - Saúde do sistema");
+  console.log("  GET  /tasks     - Listar tarefas (com cache Redis)");
+  console.log("  POST /signin    - Login com JWT");
+  console.log("\n🔒 Autenticados:");
+  console.log("  POST/PUT/PATCH/DELETE /tasks     - Gerenciar tarefas");
+  console.log("  GET/PUT /profile                 - Perfil do usuário");
+  console.log("=".repeat(50));
 });
