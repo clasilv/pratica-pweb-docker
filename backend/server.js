@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import Redis from "ioredis";
 import bd from "./src/models/index.js";
+import authRoutes from "./src/routes/auth.js";
 
 dotenv.config();
 
@@ -31,6 +32,7 @@ const port = 3000;
 
 app.use(express.json());
 app.use(cors());
+app.use("/", authRoutes);
 
 // ========== IMPLEMENTAÇÃO DE CACHE (MISS/HIT) ==========
 const cacheMiddleware = (prefix, ttl = 30) => {
@@ -150,6 +152,62 @@ app.post('/signin', (req, res) => {
     message: 'Login endpoint funcionando',
     timestamp: new Date().toISOString()    
   });
+});
+
+// ========== ROTAS DE PERFIL ==========
+
+// GET /profile - Obtém dados do usuário
+app.get('/profile', async (req, res) => {
+  try {
+    console.log('📨 GET /profile chamado');
+    
+    // TEMPORÁRIO: Mock de usuário (depois seu colega implementa JWT)
+    // Quando o middleware JWT estiver pronto, trocar por:
+    // const userId = req.user.id;
+    
+    const mockUser = {
+      id: 'user-123',
+      name: 'Clara Silva',
+      email: 'clara@exemplo.com',
+      photo: 'https://images.unsplash.com/photo-1494790108755-2616b612b786?w=150&h=150&fit=crop&crop=face'
+    };
+    
+    res.json(mockUser);
+    
+  } catch (error) {
+    console.error('❌ Erro no GET /profile:', error);
+    res.status(500).json({ error: 'Erro interno no servidor' });
+  }
+});
+
+// PUT /profile - Atualiza dados do usuário
+app.put('/profile', async (req, res) => {
+  try {
+    console.log('📨 PUT /profile chamado');
+    console.log('📦 Dados recebidos:', req.body);
+    
+    const { name, email, photo } = req.body;
+    
+    // TEMPORÁRIO: Validação básica
+    if (!name && !email && !photo) {
+      return res.status(400).json({ error: 'Nenhum dado para atualizar' });
+    }
+    
+    // TEMPORÁRIO: Mock de resposta (depois salvar no banco)
+    const updatedUser = {
+      id: 'user-123',
+      name: name || 'Clara Silva',
+      email: email || 'clara@exemplo.com',
+      photo: photo || 'https://images.unsplash.com/photo-1494790108755-2616b612b786?w=150&h=150&fit=crop&crop=face'
+    };
+    
+    console.log('✅ Perfil atualizado (mock):', updatedUser);
+    res.json(updatedUser);
+    
+  } catch (error) {
+    console.error('❌ Erro no PUT /profile:', error);
+    res.status(500).json({ error: 'Erro interno no servidor' });
+  }
 });
 
 app.listen(port, '0.0.0.0', () => {
